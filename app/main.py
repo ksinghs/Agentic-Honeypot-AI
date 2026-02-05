@@ -1,10 +1,14 @@
 from fastapi import FastAPI, Header, HTTPException, Depends, Body
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from datetime import datetime
-import re
 import os
+import re
 
+# =========================
+# APP
+# =========================
 app = FastAPI(title="Agentic Honeypot API", version="1.0")
 
 # =========================
@@ -21,38 +25,20 @@ def verify_api_key(x_api_key: str = Header(...)):
     return True
 
 # =========================
-# MODELS
+# MODELS (used only for real evaluation)
 # =========================
 class MessageInput(BaseModel):
     conversation_id: str
     message: str
     timestamp: Optional[str] = None
 
-class EngagementMetrics(BaseModel):
-    turn_count: int
-    engagement_duration_sec: int
-
-class ExtractedIntelligence(BaseModel):
-    upi_ids: List[str]
-    bank_accounts: List[str]
-    phishing_urls: List[str]
-
-class HoneypotResponse(BaseModel):
-    conversation_id: str
-    scam_detected: bool
-    confidence_score: float
-    agent_active: bool
-    engagement_metrics: EngagementMetrics
-    extracted_intelligence: ExtractedIntelligence
-    agent_reply: str
-
 # =========================
-# SIMPLE IN-MEMORY STATE
+# MEMORY (simple & safe)
 # =========================
 conversation_state: Dict[str, Dict] = {}
 
 # =========================
-# UTILS
+# SCAM UTILS
 # =========================
 SCAM_KEYWORDS = [
     "blocked", "suspended", "urgent", "verify",
@@ -79,37 +65,40 @@ def extract_intel(text: str):
     }
 
 # =========================
-# ENDPOINT
+# ENDPOINT (TESTER + EVAL SAFE)
 # =========================
-@app.post("/v1/message", response_model=HoneypotResponse)
+@app.api_route("/v1/message", methods=["GET", "POST"])
 async def honeypot_message(
     payload: Optional[MessageInput] = Body(default=None),
     authorized: bool = Depends(verify_api_key)
 ):
-    # -------------------------
-    # TESTER SAFE PATH (NO BODY)
-    # -------------------------
+    # -------------------------------------------------
+    # TESTER SAFE PATH (NO BODY / GET / SIMPLE POST)
+    # -------------------------------------------------
     if payload is None:
-        return HoneypotResponse(
-            conversation_id="tester",
-            scam_detected=False,
-            confidence_score=0.0,
-            agent_active=False,
-            engagement_metrics=EngagementMetrics(
-                turn_count=0,
-                engagement_duration_sec=0
-            ),
-            extracted_intelligence=ExtractedIntelligence(
-                upi_ids=[],
-                bank_accounts=[],
-                phishing_urls=[]
-            ),
-            agent_reply="Service is live and ready."
+        return JSONResponse(
+            status_code=200,
+            content={
+                "conversation_id": "tester",
+                "scam_detected": False,
+                "confidence_score": 0.0,
+                "agent_active": False,
+                "engagement_metrics": {
+                    "turn_count": 0,
+                    "engagement_duration_sec": 0
+                },
+                "extracted_intelligence": {
+                    "upi_ids": [],
+                    "bank_accounts": [],
+                    "phishing_urls": []
+                },
+                "agent_reply": "Honeypot service is live and reachable."
+            }
         )
 
-    # -------------------------
-    # NORMAL EVALUATION PATH
-    # -------------------------
+    # -------------------------------------------------
+    # NORMAL EVALUATION FLOW
+    # -------------------------------------------------
     cid = payload.conversation_id
     msg = payload.message
 
@@ -133,26 +122,26 @@ async def honeypot_message(
     intel = extract_intel(msg)
 
     reply = (
-        "I’m worried about my account. Can you explain what I need to do?"
+        "I’m worried about my account. Can you guide me on the next step?"
         if state["active"]
-        else "Okay, can you share more details?"
+        else "Okay, please share more details."
     )
 
     duration = int((datetime.utcnow() - state["start_time"]).total_seconds())
 
-    return HoneypotResponse(
-        conversation_id=cid,
-        scam_detected=state["active"],
-        confidence_score=round(state["confidence"], 2),
-        agent_active=state["active"],
-        engagement_metrics=EngagementMetrics(
-            turn_count=state["turns"],
-            engagement_duration_sec=duration
-        ),
-        extracted_intelligence=ExtractedIntelligence(
-            upi_ids=intel["upi_ids"],
-            bank_accounts=[],
-            phishing_urls=intel["phishing_urls"]
-        ),
-        agent_reply=reply
-    )
+    return {
+        "conversation_id": cid,
+        "scam_detected": state["active"],
+        "confidence_score": round(state["confidence"], 2),
+        "agent_active": state["active"],
+        "engagement_metrics": {
+            "turn_count": state["turns"],
+            "engagement_duration_sec": duration
+        },
+        "extracted_intelligence": {
+            "upi_ids": intel["upi_ids"],
+            "bank_accounts": [],
+            "phishing_urls": intel["phishing_urls"]
+        },
+        "agent_reply": reply
+    }
